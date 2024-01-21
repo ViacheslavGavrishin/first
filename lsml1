@@ -1,0 +1,5 @@
+err_sessions = (
+    clickstream
+    .rdd
+    .filter(lambda row: 'error' in row.event_type)
+    .map(lambda row:((row.user_id, row.session_id), row.timestamp)
