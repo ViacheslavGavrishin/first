@@ -1,1 +1,84 @@
+import tqdm.notebook as tqdm
+import numpy as np
+import scipy
+import sklearn
+
+
+import findspark
+findspark.init()
+
+import pyspark
+sc = pyspark.SparkContext(appName='jupyter')
+
+from pyspark.sql import SparkSession, Row
+se = SparkSession(sc)
+
+! hdfs dfs -ls
+
+df = se.read.option("delimiter", "\t").csv("clickstream.csv", header=True)
+df.show(5)
+
+df.count()
+
+bad_sessions = (
+    df.rdd
+    .filter(lambda x: 'error' in x.event_type) # filter by word error in event_type
+    .map(lambda x: ((x.user_id, x.session_id),x.timestamp)) # take tuple of user_id, session_id and timestamp
+    .reduceByKey(lambda x,y: min(x,y)) # take first/earliest error (there could be few in one session)
+)
+
+# exclude errors from initial dataset
+clicks_with_no_errors = (
+    df.rdd
+    .map(lambda x: ((x.user_id, x.session_id), x)) # create key as a tuple
+    .leftOuterJoin(bad_sessions) # left join - take initial table and match bad sessions, all other rows will be marked with None
+    .filter(lambda x: x[1][1] is None or x[1][0].timestamp < x[1][1]) # check if it is not a bad session OR timestamp is less than one for bad session (records before error)
+    .map(lambda x: x[1][0]) # group by initial row - our table is filtered by not bad sessions or (if bad sessions) by records before bad session
+    .map(lambda x: ((x.user_id, x.session_id), x.event_page)) # take tuple of user_id, session_id and as another field event page
+                        )
+
+# take a look at dataframe
+clicks_no_errors_df = clicks_with_no_errors.toDF()
+clicks_no_errors_df.show(5,truncate=False)
+
+# transform the dataset
+clickstream_with_no_errors_transformed = (
+    clicks_with_no_errors
+    .map(lambda x: (x[0], [x[1]])) # for eash row take user_id and page in the list form
+    .reduceByKey(lambda x, y: x + y) # for each user_id add page to list
+    .map(lambda x: (x[0], sorted(set(x[1]), key=x[1].index))) # for each row 1) take user_id 2) get rid of repeated elements in page by transforming to set 3)sort by index
+    .map(lambda x: (x[0], '-'.join(x[1]))) # make dashes
+                        )
+# take a look at transformed dataset
+clickstream_with_no_errors_transformed_df = clickstream_with_no_errors_transformed.toDF()
+clickstream_with_no_errors_transformed_df.show(5,truncate=False)
+
+# calculate the routes
+routes = (
+    clickstream_with_no_errors_transformed
+        .map(lambda x: (x[1], 1)) # take route and add 1 as a value to additional column
+        .reduceByKey(lambda x, y: x + y) # count routes occurence (sum)
+        .sortBy(lambda x: x[1], ascending=False) # sort by occurence
+        )
+# take a look at the routes
+routes_df = routes.toDF()
+routes_df.show(30)
+
+result = routes.take(30)
+
+import json
+json.dumps(dict(result))
+
+# result is:
+"""
+'{"main": 8184, "main-archive": 1210, "main-rabota": 1154, "main-internet": 980, "main-bonus": 941, "main-news": 834,
+"main-tariffs": 733, "main-online": 635, "main-vklad": 549, "main-archive-rabota": 235, "main-rabota-archive": 221, 
+"main-internet-rabota": 189, "main-bonus-archive": 187, "main-bonus-rabota": 185, "main-archive-internet": 184, 
+"main-news-rabota": 183, "main-rabota-bonus": 178, "main-rabota-internet": 176, "main-internet-archive": 174, 
+"main-archive-news": 171, "main-archive-bonus": 171, "main-rabota-news": 168, "main-news-archive": 154, "main-internet-bonus": 151, 
+"main-archive-tariffs": 146, "main-internet-news": 138, "main-news-internet": 134, "main-archive-online": 133, "main-tariffs-archive": 131, 
+"main-tariffs-internet": 129}'
+"""
+
+
 
