@@ -1,25 +1,28 @@
+# make the imports
 import tqdm.notebook as tqdm
 import numpy as np
 import scipy
 import sklearn
 
-
+# initialize spark context and session
 import findspark
 findspark.init()
-
 import pyspark
 sc = pyspark.SparkContext(appName='jupyter')
-
 from pyspark.sql import SparkSession, Row
 se = SparkSession(sc)
 
+# check files on hdfs
 ! hdfs dfs -ls
 
+# read data file and view 5 lines of it
 df = se.read.option("delimiter", "\t").csv("clickstream.csv", header=True)
 df.show(5)
 
+# count the number of rows in file
 df.count()
 
+# calculate bad sessions
 bad_sessions = (
     df.rdd
     .filter(lambda x: 'error' in x.event_type) # filter by word error in event_type
